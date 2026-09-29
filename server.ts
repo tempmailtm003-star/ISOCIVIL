@@ -2,9 +2,226 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import path from 'path';
+import { GoogleGenAI, Type } from '@google/genai';
+
+// Initialize Gemini SDK with User-Agent header for telemetry
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+  httpOptions: {
+    headers: {
+      'User-Agent': 'aistudio-build',
+    }
+  }
+});
+
+// Structured JSON Schema for Autonomous Agentic Dispatch
+export const AGENTIC_DISPATCH_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    incidentId: {
+      type: Type.STRING,
+      description: 'The unique identifier of the incident being dispatched.'
+    },
+    priorityTier: {
+      type: Type.STRING,
+      description: 'Tactical triage priority tier: P1-CRITICAL, P2-URGENT, or P3-ROUTINE.'
+    },
+    vulnerabilityScore: {
+      type: Type.NUMBER,
+      description: 'Calculated municipal risk and vulnerability score between 0 and 100.'
+    },
+    situationalAnalysis: {
+      type: Type.STRING,
+      description: 'Concise tactical appraisal of incident dynamics, hazards, and rationale for resource allocation.'
+    },
+    recommendedUnits: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          unitId: {
+            type: Type.STRING,
+            description: 'Callsign of recommended field vehicle (e.g. ALS-101, ENG-202, PAT-404).'
+          },
+          assignedRole: {
+            type: Type.STRING,
+            description: 'Designated role such as Primary ALS, Fire Suppression, Perimeter Lockdown, or Search & Rescue.'
+          },
+          reason: {
+            type: Type.STRING,
+            description: 'Operational justification based on vehicle proximity, equipment, and scene hazards.'
+          }
+        },
+        required: ['unitId', 'assignedRole', 'reason']
+      },
+      description: 'Ranked list of recommended emergency response units.'
+    },
+    receivingFacility: {
+      type: Type.OBJECT,
+      properties: {
+        facilityName: {
+          type: Type.STRING,
+          description: 'Name of the designated receiving trauma center, hospital, or safety haven.'
+        },
+        facilityType: {
+          type: Type.STRING,
+          description: 'Type of facility (e.g. Level 1 Trauma Center, Burn Speciality Unit, District General Hospital).'
+        },
+        specialtyNote: {
+          type: Type.STRING,
+          description: 'Clinical readiness status, capacity, or specialized emergency care note.'
+        }
+      },
+      required: ['facilityName', 'facilityType', 'specialtyNote']
+    },
+    tacticalDirectives: {
+      type: Type.OBJECT,
+      properties: {
+        radioNet: {
+          type: Type.STRING,
+          description: 'Designated tactical radio channel/talkgroup for the incident (e.g. TAC-1 OMNI, FIRE-OPS 2).'
+        },
+        greenCorridor: {
+          type: Type.STRING,
+          description: 'Optimal route corridor and arterial streets prioritizing expedited emergency vehicle transit.'
+        },
+        safetyPrecautions: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.STRING
+          },
+          description: 'Mandatory scene safety measures, PPE levels, and hazard zone protocols.'
+        }
+      },
+      required: ['radioNet', 'greenCorridor', 'safetyPrecautions']
+    }
+  },
+  required: [
+    'incidentId',
+    'priorityTier',
+    'vulnerabilityScore',
+    'situationalAnalysis',
+    'recommendedUnits',
+    'receivingFacility',
+    'tacticalDirectives'
+  ]
+};
+
+// Fallback generator for resilient mock response when API is unavailable or rate limited
+function generateMockDispatchPlan(incident: any, availableVehicles: any[] = [], availableHospitals: any[] = []) {
+  const incidentId = incident?.id || `INC-${Date.now()}`;
+  const incType = incident?.type || 'Medical';
+  const incLoc = incident?.location || 'Sector Staging Hub';
+  const severity = incident?.severity || 'High';
+
+  let priorityTier = 'P2-URGENT';
+  let vulnerabilityScore = 74;
+  if (severity === 'Critical' || incType === 'Fire' || incType === 'Hazmat' || incType === 'Radiation') {
+    priorityTier = 'P1-CRITICAL';
+    vulnerabilityScore = 89;
+  } else if (severity === 'Low') {
+    priorityTier = 'P3-ROUTINE';
+    vulnerabilityScore = 42;
+  }
+
+  // Filter or select top 1-3 appropriate units
+  const unitsToSelect = (availableVehicles && availableVehicles.length > 0)
+    ? availableVehicles.slice(0, 3)
+    : [
+        { id: 'ALS-101', type: 'Ambulance', name: 'Metro ALS Medic 1' },
+        { id: 'ENG-202', type: 'Fire', name: 'Engine Company 2' }
+      ];
+
+  const recommendedUnits = unitsToSelect.map((v, idx) => ({
+    unitId: v.id || `UNIT-${idx + 1}`,
+    assignedRole: idx === 0 ? 'Primary Response Lead' : (v.type === 'Fire' ? 'Scene Containment & Safety' : 'Secondary Triage / Support'),
+    reason: `Optimal proximity to ${incLoc} with verified operational readiness for ${incType} emergencies.`
+  }));
+
+  const hospital = (availableHospitals && availableHospitals.length > 0)
+    ? availableHospitals[0]
+    : { name: 'Apollo Main Hospital - Greams Road', type: 'Level 1 Trauma & Cardiac Center', beds: 42 };
+
+  return {
+    incidentId,
+    priorityTier,
+    vulnerabilityScore,
+    situationalAnalysis: `Autonomous triage analysis for ${incType} incident at ${incLoc}. Severity assessed as ${severity}. Dispatched closest verified responders with priority emergency routing and automated corridor preemption.`,
+    recommendedUnits,
+    receivingFacility: {
+      facilityName: hospital.name || 'Apollo Main Hospital',
+      facilityType: hospital.type || 'Level 1 Trauma Center',
+      specialtyNote: 'Trauma ICU and Acute Care teams alerted. Corridor clearance broadcasted.'
+    },
+    tacticalDirectives: {
+      radioNet: `TAC-${incType === 'Fire' ? '3 FIRE' : '1 MED'} DISPATCH`,
+      greenCorridor: `Primary Arterial Corridor via Mount Road / EVR Periyar Salai to ${incLoc}`,
+      safetyPrecautions: [
+        'Maintain 360-degree scene situational perimeter.',
+        'Wear standard Level-B PPE / Biohazard precautions.',
+        'Establish direct command link on designated tactical radio net.'
+      ]
+    },
+    isMockFallback: true
+  };
+}
+
+// Live agentic dispatch execution using @google/genai with structured schema and fallback
+export async function generateAgenticDispatch(incident: any, availableVehicles: any[] = [], availableHospitals: any[] = []) {
+  if (!process.env.GEMINI_API_KEY) {
+    console.warn('[AgenticDispatch] GEMINI_API_KEY is not set. Executing high-fidelity mock fallback.');
+    return generateMockDispatchPlan(incident, availableVehicles, availableHospitals);
+  }
+
+  try {
+    const prompt = `You are the IsoCivil Autonomous Emergency Command Agent.
+Analyze the following incident and available resources to generate an authoritative, tactical dispatch plan.
+
+INCIDENT DETAILS:
+- ID: ${incident?.id || 'Unknown'}
+- Type: ${incident?.type || 'General Emergency'}
+- Location: ${incident?.location || 'Unknown Location'}
+- Severity: ${incident?.severity || 'Medium'}
+- Description: ${incident?.description || 'N/A'}
+- Reported At: ${incident?.reportedTime || 'Immediate'}
+- Hazard Details: ${incident?.hazardZone ? JSON.stringify(incident.hazardZone) : 'None reported'}
+
+AVAILABLE UNITS (Total: ${availableVehicles?.length || 0}):
+${(availableVehicles || []).slice(0, 10).map(v => `- ID: ${v.id}, Type: ${v.type}, CallSign: ${v.name || v.id}, Status: ${v.status}, Lat: ${v.lat}, Lng: ${v.lng}`).join('\n')}
+
+AVAILABLE RECEIVING HOSPITALS:
+${(availableHospitals || []).slice(0, 6).map(h => `- Name: ${h.name}, Type: ${h.type || 'Hospital'}, TraumaBeds: ${h.traumaBeds ?? h.beds ?? 'Available'}`).join('\n')}
+
+INSTRUCTIONS:
+1. Select the most critical 1-3 vehicles according to proximity, unit type match, and incident hazard profile.
+2. Select the optimal receiving hospital facility with appropriate clinical capabilities.
+3. Formulate clear tactical directives including designated radio net, green corridor street path, and mandatory scene safety precautions.
+4. Return strictly structured JSON matching the provided schema.`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: AGENTIC_DISPATCH_SCHEMA,
+        systemInstruction: 'You are an autonomous tactical emergency dispatch AI engine. You make rapid, precise, life-saving resource allocation decisions in accordance with emergency management protocols.'
+      }
+    });
+
+    const parsedPlan = JSON.parse(response.text || '{}');
+    return {
+      ...parsedPlan,
+      isMockFallback: false
+    };
+  } catch (error) {
+    console.error('[AgenticDispatch] Error calling Gemini API, triggering mock fallback block:', error);
+    return generateMockDispatchPlan(incident, availableVehicles, availableHospitals);
+  }
+}
 
 async function startServer() {
   const app = express();
+  app.use(express.json());
   const httpServer = createServer(app);
   
   const io = new Server(httpServer, {
@@ -14,6 +231,21 @@ async function startServer() {
   // In-memory state for prototype
   const responders = new Map();
   const activeDirectives = new Map();
+
+  // Agentic Dispatch API Route
+  app.post('/api/agentic-dispatch', async (req, res) => {
+    try {
+      const { incident, availableVehicles, availableHospitals } = req.body || {};
+      if (!incident) {
+        return res.status(400).json({ error: 'Incident payload is required' });
+      }
+      const dispatchPlan = await generateAgenticDispatch(incident, availableVehicles, availableHospitals);
+      res.json(dispatchPlan);
+    } catch (err: any) {
+      console.error('[API /api/agentic-dispatch] Unhandled error:', err);
+      res.status(500).json({ error: 'Failed to generate agentic dispatch plan' });
+    }
+  });
 
   // REST API route to query unit dispatch status
   app.get('/api/unit-status/:unitId', (req, res) => {
