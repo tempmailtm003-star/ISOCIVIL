@@ -1,0 +1,8 @@
+{
+  "name": "IsoCivil",
+  "description": "Its a project about civic services communication mutually along with efficent routing and services",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
